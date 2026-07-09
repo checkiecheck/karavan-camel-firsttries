@@ -1,3 +1,4 @@
+# note: er wordt uitggegaan van een beschikare LLM op http://192.168.1.81:11434 , pas dit aan waar nodig. een LLM draaien  binnen deze vm is niet aan te raden cq bruikbaar
 Vagrant.configure("2") do |config|
   config.vm.box = "bento/ubuntu-24.04"
   config.vm.network "private_network", ip: "192.168.56.10"

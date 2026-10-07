@@ -8,7 +8,9 @@ COPY *.camel.yaml src/main/resources/
 COPY application.properties src/main/resources/
 RUN mvn -B package -DskipTests
 
-FROM quay.io/quarkus/quarkus-micro-image:2.13
+# JVM-mode: quarkus-run.jar heeft een gewone JRE nodig.
+# (quarkus-micro-image is ALLEEN voor native executables - geen java binary!)
+FROM docker.io/library/eclipse-temurin:21-jre
 WORKDIR /work/
 COPY --from=build /workspace/target/quarkus-app/ /work/
 EXPOSE 8080

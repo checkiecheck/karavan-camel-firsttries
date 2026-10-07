@@ -1,0 +1,139 @@
+name: Build and Deploy Changed Integrations
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+# GHCR bij de repo (ghcr.io/<owner>/<repo>); een klant die lokale/air-gapped
+# images wil (bv. politie) krijgt dezelfde image later via een aparte
+# registry-spiegel — de build zelf verandert dan niet.
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository }}   # owner/repo, lowercase verplicht
+  NAMESPACE: integration
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Install & Configure kubectl
+        run: |
+          curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          mv kubectl /usr/local/bin/
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          # k3s gebruikt een self-signed cluster-cert; of voeg de
+          # k3s CA toe aan de secret: insecure-skip-tls-verify is voor test prima
+          kubectl config set-cluster default --insecure-skip-tls-verify=true
+
+      - name: Registry login (GHCR bij de repo)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | \
+            docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Detecteer en Deploy Projecten
+        run: |
+          CHANGED_DIRS=$(git diff --name-only HEAD^ HEAD | awk -F'/' '{print $1}' | sort -u)
+          # GHCR vereist lowercase image-paden
+          IMAGE_NS_LC=$(echo "${IMAGE_NAMESPACE}" | tr '[:upper:]' '[:lower:]')
+
+          for APP_NAME in $CHANGED_DIRS; do
+            if [ -f "$APP_NAME/application.properties" ]; then
+              echo "=== Deploying $APP_NAME ==="
+              IMAGE_NAME="${REGISTRY}/${IMAGE_NS_LC}/${APP_NAME}:${GITHUB_SHA::7}"
+
+              docker build -t "$IMAGE_NAME" "$APP_NAME"
+              docker push "$IMAGE_NAME"
+
+              # Basis-manifest per app; als de app een eigen k8s/ map heeft,
+              # wint die (volledige controle incl. Kong CRDs)
+              if [ -d "$APP_NAME/k8s" ]; then
+                # substitueer placeholders in app-specifieke manifests
+                grep -rl '<CA_CERTIFICATE_ID>' "$APP_NAME/k8s" | while read -r f; do
+                  sed -i "s/<CA_CERTIFICATE_ID>/${{ secrets.KONG_CA_UUID }}/" "$f"
+                done
+                grep -rl '<IMAGE>' "$APP_NAME/k8s" | while read -r f; do
+                  sed -i "s#<IMAGE>#${IMAGE_NAME}#" "$f"
+                done
+                kubectl apply -n ${NAMESPACE} -f "$APP_NAME/k8s/"
+                kubectl set image deployment/${APP_NAME} camel-route=${IMAGE_NAME} -n ${NAMESPACE}
+              else
+                cat <<EOF | kubectl apply -f -
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: ${APP_NAME}
+            namespace: ${NAMESPACE}
+          spec:
+            replicas: 1
+            selector:
+              matchLabels:
+                app: ${APP_NAME}
+            template:
+              metadata:
+                labels:
+                  app: ${APP_NAME}
+              spec:
+                containers:
+                - name: camel-route
+                  image: ${IMAGE_NAME}
+                  imagePullPolicy: Always
+                  ports:
+                  - containerPort: 8080
+                  envFrom:
+                  - configMapRef:
+                      name: ${APP_NAME}-config
+                  env:
+                  - name: POD_NAME
+                    value: ${APP_NAME}
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: ${APP_NAME}-svc
+            namespace: ${NAMESPACE}
+          spec:
+            type: ClusterIP
+            ports:
+            - port: 8080
+              targetPort: 8080
+            selector:
+              app: ${APP_NAME}
+          ---
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ${APP_NAME}-ingress
+            namespace: ${NAMESPACE}
+            annotations:
+              konghq.com/strip-path: "true"
+          spec:
+            ingressClassName: kong
+            rules:
+            - http:
+                paths:
+                - path: /${APP_NAME}
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: ${APP_NAME}-svc
+                      port:
+                        number: 8080
+          EOF
+                kubectl rollout restart deployment/${APP_NAME} -n ${NAMESPACE}
+              fi
+
+              kubectl rollout status deployment/${APP_NAME} -n ${NAMESPACE} --timeout=120s
+            fi
+          done

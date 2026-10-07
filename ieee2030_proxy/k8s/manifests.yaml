@@ -1,0 +1,140 @@
+# ieee2030_proxy/k8s/ — volledige manifesten voor de generieke monorepo-workflow.
+# Placeholders die de workflow substitueert:
+#   <IMAGE>             -> ghcr.io/<owner>/<repo>/<app>:<sha>
+#   <CA_CERTIFICATE_ID> -> KONG_CA_UUID secret (CA geupload in Kong)
+# Overige configuratie (target SEP2-server, CN-header, logging) via env vars.
+
+# --- ConfigMap: per-app configuratie (vult envFrom in de Deployment) ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ieee2030-proxy-config
+  namespace: integration
+data:
+  IEEE2030_PROXY_PORT: "8080"
+  IEEE2030_CN_HEADER: "X-Client-CN"
+  # CN-allowlist: leeg = trustbased (alleen cert-CV vereist).
+  # Vul met komma-gescheiden CN's voor expliciete toelating; PR = auditlog.
+  # Wil de security-officer de lijst buiten de repo: maak een Secret
+  # IEEE2030_CN_ALLOWLIST en verwijder deze key (env var wint dan).
+  IEEE2030_CN_ALLOWLIST: ""
+  IEEE2030_TARGET_BASE: "https://sep2-backend.example.com:8443"
+  IEEE2030_TARGET_HOST: "sep2-backend.example.com"
+  IEEE2030_TARGET_PORT: "8443"
+  IEEE2030_TARGET_TLS: "true"
+  LOG_JSON: "true"
+  LOG_LEVEL: "INFO"
+---
+# --- Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ieee2030-proxy
+  namespace: integration
+  labels:
+    app: ieee2030-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ieee2030-proxy
+  template:
+    metadata:
+      labels:
+        app: ieee2030-proxy
+    spec:
+      containers:
+        - name: camel-route
+          image: <IMAGE>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: ieee2030-proxy-config
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /q/health/live
+              port: 8080
+          readinessProbe:
+            httpGet:
+              path: /q/health/ready
+              port: 8080
+---
+# --- Service ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ieee2030-proxy-svc
+  namespace: integration
+  labels:
+    app: ieee2030-proxy
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: ieee2030-proxy
+---
+# --- Kong: mTLS-terminatie (CA via KONG_CA_UUID, workflow substitueert) ---
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: ieee2030-mtls
+  namespace: integration
+plugin: mtls
+config:
+  ca_certificates:
+    - <CA_CERTIFICATE_ID>
+  skip_consumer_lookup: true
+---
+# --- Kong: CN uit client-cert -> header naar upstream (+ anti-spoof) ---
+# DB-less Kong: pre-function overschrijft X-Client-CN met de cert-CN;
+# zonder cert wordt de header GEWIST zodat een client hem niet zelf kan spoofen.
+# De integratie weigert (403) als de header ontbreekt.
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: ieee2030-client-cn
+  namespace: integration
+plugin: pre-function
+config:
+  functions:
+    - |
+      kong.service.request.clear_header("X-Client-CN")
+      local cert = kong.client.tls_cert()
+      if cert then
+        kong.service.request.set_header("X-Client-CN", cert:get_subject_cn())
+      end
+---
+# --- Ingress: root-pad, strip-path UIT zodat SEP2-paden intact blijven ---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ieee2030-proxy-ingress
+  namespace: integration
+  annotations:
+    konghq.com/strip-path: "false"
+    konghq.com/protocols: "https"
+    konghq.com/plugins: ieee2030-mtls,ieee2030-client-cn
+spec:
+  ingressClassName: kong
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ieee2030-proxy-svc
+                port:
+                  number: 8080

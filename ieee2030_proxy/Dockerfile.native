@@ -1,0 +1,22 @@
+# Native build - snellere koude starts, lager geheugengebruik.
+# Build duurt aanzienlijk langer dan de JVM-variant (Dockerfile).
+# Gebruik: docker build -f Dockerfile.native . (build-context = deze dir)
+FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-21 AS build
+WORKDIR /workspace
+COPY pom.xml .
+RUN mvn -B dependency:go-offline
+RUN mkdir -p src/main/resources
+COPY *.camel.yaml src/main/resources/
+COPY application.properties src/main/resources/
+RUN mvn -B package -DskipTests -Dnative \
+    -Dquarkus.native.container-build=true
+
+# Native runtime: ubi9-based, tag 2.0 (quarkus-micro-image is native-only!)
+FROM quay.io/quarkus/ubi9-quarkus-micro-image:2.0
+WORKDIR /work/
+COPY --from=build /workspace/target/*-runner /work/application
+RUN chmod 775 /work
+EXPOSE 8080
+# HTTP only: mTLS-terminatie gebeurt in Kong Ingress (kong.conf),
+# CN van het client-certificaat komt binnen via X-Client-CN header.
+ENTRYPOINT ["./application", "-Dquarkus.http.host=0.0.0.0"]

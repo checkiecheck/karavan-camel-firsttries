@@ -1,20 +1,23 @@
-- onException:
-    exception:
-    - java.io.IOException
-    - java.util.concurrent.TimeoutException
-    - org.apache.camel.CamelExecutionException
-    handled:
-      constant: 'true'
-    steps:
-    - log: 'event=message-failed level=ERROR exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} index={{es.index}} failedEndpoint=${exchangeProperty.CamelFailureEndpoint} errorMessage=${exception.message}'
-    - to:
-        uri: rabbitmq://{{rabbitmq.host}}:{{rabbitmq.port}}/{{rabbitmq.dlx.exchange}}
-        parameters:
-          routingKey: '{{rabbitmq.dlx.routingKey}}'
-          username: '{{rabbitmq.username}}'
-          password: '{{rabbitmq.password}}'
-          vhost: '{{rabbitmq.vhost}}'
-          skipQueueDeclare: 'true'
+- routeConfiguration:
+    id: rmq-error-handling
+    onException:
+    - onException:
+        exception:
+        - java.io.IOException
+        - java.util.concurrent.TimeoutException
+        - org.apache.camel.CamelExecutionException
+        handled:
+          constant: 'true'
+        steps:
+        - log: 'event=message-failed level=ERROR exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} index={{es.index}} failedEndpoint=${exchangeProperty.CamelFailureEndpoint} errorMessage=${exception.message}'
+        - to:
+            uri: rabbitmq://{{rabbitmq.host}}:{{rabbitmq.port}}/{{rabbitmq.dlx.exchange}}
+            parameters:
+              routingKey: '{{rabbitmq.dlx.routingKey}}'
+              username: '{{rabbitmq.username}}'
+              password: '{{rabbitmq.password}}'
+              vhost: '{{rabbitmq.vhost}}'
+              skipQueueDeclare: 'true'
 
 - from:
     uri: rabbitmq://{{rabbitmq.host}}:{{rabbitmq.port}}/{{rabbitmq.exchange}}
@@ -29,6 +32,7 @@
       prefetchEnabled: 'true'
       prefetchCount: '{{rabbitmq.prefetchCount:10}}'
       consumers: '{{rabbitmq.consumers:1}}'
+    routeConfigurationId: rmq-error-handling
     id: rabbitmq-to-elastic
     group: integration
     steps:

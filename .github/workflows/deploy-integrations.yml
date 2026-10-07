@@ -51,6 +51,9 @@ jobs:
           for APP_NAME in $CHANGED_DIRS; do
             if [ -f "$APP_NAME/application.properties" ]; then
               echo "=== Deploying $APP_NAME ==="
+              # JBang- vs pom-consistentiecheck vóór de build:
+              # elke camel.jbang.dependencies-component moet in de pom.xml zitten
+              bash scripts/check-jbang-deps.sh "$APP_NAME"
               IMAGE_NAME="${REGISTRY}/${IMAGE_NS_LC}/${APP_NAME}:${GITHUB_SHA::7}"
 
               docker build -t "$IMAGE_NAME" "$APP_NAME"

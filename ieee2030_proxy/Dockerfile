@@ -8,7 +8,7 @@ COPY *.camel.yaml src/main/resources/
 COPY application.properties src/main/resources/
 RUN mvn -B package -DskipTests
 
-FROM quay.io/quarkus/quarkus-micro-image:2.1.0
+FROM quay.io/quarkus/quarkus-micro-image:2.13
 WORKDIR /work/
 COPY --from=build /workspace/target/quarkus-app/ /work/
 EXPOSE 8080

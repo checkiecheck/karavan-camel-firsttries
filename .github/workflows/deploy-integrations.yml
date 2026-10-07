@@ -15,64 +15,103 @@ env:
   NAMESPACE: integration
 
 jobs:
-  build-and-deploy:
+  # ---- Build: gehosted, heeft alleen GHCR nodig ----
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    outputs:
+      changed-dirs: ${{ steps.detect.outputs.changed-dirs }}
     steps:
       - name: Code ophalen
         uses: actions/checkout@v4
         with:
           fetch-depth: 2
 
-      - name: Install & Configure kubectl
+      - name: Detecteer gewijzigde integraties
+        id: detect
         run: |
-          curl -LO "https://dl.k8s.io/release/v1.30.0/bin/linux/amd64/kubectl"
-          chmod +x kubectl
-          mv kubectl /usr/local/bin/
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
-          # k3s gebruikt een self-signed cluster-cert; of voeg de
-          # k3s CA toe aan de secret: insecure-skip-tls-verify is voor test prima
-          kubectl config set-cluster default --insecure-skip-tls-verify=true
+          CHANGED_DIRS=$(git diff --name-only HEAD^ HEAD | awk -F'/' '{print $1}' | sort -u)
+          # filter op echte integratie-directories (application.properties aanwezig)
+          VALID=""
+          for d in $CHANGED_DIRS; do
+            [ -f "$d/application.properties" ] && VALID="$VALID $d"
+          done
+          echo "changed-dirs=$VALID" >> "$GITHUB_OUTPUT"
+          echo "Gewijzigde integraties:$VALID"
 
       - name: Registry login (GHCR bij de repo)
+        if: steps.detect.outputs.changed-dirs != ''
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" | \
             docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
-      - name: Detecteer en Deploy Projecten
+      - name: Dependency-check & container build per integratie
+        if: steps.detect.outputs.changed-dirs != ''
         run: |
-          CHANGED_DIRS=$(git diff --name-only HEAD^ HEAD | awk -F'/' '{print $1}' | sort -u)
-          # GHCR vereist lowercase image-paden
           IMAGE_NS_LC=$(echo "${IMAGE_NAMESPACE}" | tr '[:upper:]' '[:lower:]')
 
-          for APP_NAME in $CHANGED_DIRS; do
-            if [ -f "$APP_NAME/application.properties" ]; then
-              echo "=== Deploying $APP_NAME ==="
-              # JBang- vs pom-consistentiecheck vóór de build:
-              # elke camel.jbang.dependencies-component moet in de pom.xml zitten
-              bash scripts/check-jbang-deps.sh "$APP_NAME"
-              IMAGE_NAME="${REGISTRY}/${IMAGE_NS_LC}/${APP_NAME}:${GITHUB_SHA::7}"
+          for APP_NAME in ${{ steps.detect.outputs.changed-dirs }}; do
+            echo "=== Building $APP_NAME ==="
+            # JBang- vs pom-consistentiecheck vóór de build:
+            # elke camel.jbang.dependencies-component moet in de pom.xml zitten
+            bash scripts/check-jbang-deps.sh "$APP_NAME"
 
-              docker build -t "$IMAGE_NAME" "$APP_NAME"
-              docker push "$IMAGE_NAME"
+            IMAGE_NAME="${REGISTRY}/${IMAGE_NS_LC}/${APP_NAME}:${GITHUB_SHA::7}"
+            docker build -t "$IMAGE_NAME" "$APP_NAME"
+            docker push "$IMAGE_NAME"
+          done
 
-              # Basis-manifest per app; als de app een eigen k8s/ map heeft,
-              # wint die (volledige controle incl. Kong CRDs)
-              if [ -d "$APP_NAME/k8s" ]; then
-                # substitueer placeholders in app-specifieke manifests
-                grep -rl '<CA_CERTIFICATE_ID>' "$APP_NAME/k8s" | while read -r f; do
-                  sed -i "s/<CA_CERTIFICATE_ID>/${{ secrets.KONG_CA_UUID }}/" "$f"
-                done
-                grep -rl '<IMAGE>' "$APP_NAME/k8s" | while read -r f; do
-                  sed -i "s#<IMAGE>#${IMAGE_NAME}#" "$f"
-                done
-                kubectl apply -n ${NAMESPACE} -f "$APP_NAME/k8s/"
-                kubectl set image deployment/${APP_NAME} camel-route=${IMAGE_NAME} -n ${NAMESPACE}
-              else
-                cat <<EOF | kubectl apply -f -
+  # ---- Deploy: self-hosted runner in het k3s-netwerk (pollt uitgaand bij GitHub) ----
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed-dirs != ''
+    runs-on: self-hosted
+    concurrency:
+      group: deploy-integration-ns
+      cancel-in-progress: false
+    steps:
+      - name: Code ophalen
+        uses: actions/checkout@v4
+
+      - name: Configureer kubectl (kubeconfig uit secret, plain YAML)
+        run: |
+          if [ -z "${{ secrets.KUBE_CONFIG }}" ]; then
+            echo "KUBE_CONFIG secret is leeg of ontbreekt"; exit 1
+          fi
+          # accepteer óók per ongeluk base64-gecodeerde secrets
+          if echo "${{ secrets.KUBE_CONFIG }}" | head -1 | grep -qE '^[A-Za-z0-9+/=]+$'; then
+            echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config 2>/dev/null || \
+              echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          else
+            echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          fi
+          chmod 600 ~/.kube/config
+          # sanity: cluster moet bereikbaar zijn, anders duidelijke fout
+          kubectl cluster-info || { echo "k3s API niet bereikbaar vanaf de runner — check server:-URL in de kubeconfig"; exit 1; }
+
+      - name: Deploy per integratie
+        run: |
+          IMAGE_NS_LC=$(echo "${IMAGE_NAMESPACE}" | tr '[:upper:]' '[:lower:]')
+
+          for APP_NAME in ${{ needs.build.outputs.changed-dirs }}; do
+            echo "=== Deploying $APP_NAME ==="
+            IMAGE_NAME="${REGISTRY}/${IMAGE_NS_LC}/${APP_NAME}:${GITHUB_SHA::7}"
+
+            # Directory met eigen k8s/ wint (volledige controle incl. Kong CRDs);
+            # anders geldt het generieke manifest hieronder.
+            if [ -d "$APP_NAME/k8s" ]; then
+              grep -rl '<CA_CERTIFICATE_ID>' "$APP_NAME/k8s" | while read -r f; do
+                sed -i "s/<CA_CERTIFICATE_ID>/${{ secrets.KONG_CA_UUID }}/" "$f"
+              done
+              grep -rl '<IMAGE>' "$APP_NAME/k8s" | while read -r f; do
+                sed -i "s#<IMAGE>#${IMAGE_NAME}#" "$f"
+              done
+              kubectl apply -n ${NAMESPACE} -f "$APP_NAME/k8s/"
+              kubectl set image deployment/${APP_NAME} camel-route=${IMAGE_NAME} -n ${NAMESPACE}
+            else
+              cat <<EOF | kubectl apply -f -
           apiVersion: apps/v1
           kind: Deployment
           metadata:
@@ -129,14 +168,13 @@ jobs:
                 - path: /${APP_NAME}
                   pathType: Prefix
                   backend:
-                    service:
+                  service:
                       name: ${APP_NAME}-svc
                       port:
                         number: 8080
           EOF
-                kubectl rollout restart deployment/${APP_NAME} -n ${NAMESPACE}
-              fi
-
-              kubectl rollout status deployment/${APP_NAME} -n ${NAMESPACE} --timeout=120s
+              kubectl rollout restart deployment/${APP_NAME} -n ${NAMESPACE}
             fi
+
+            kubectl rollout status deployment/${APP_NAME} -n ${NAMESPACE} --timeout=120s
           done

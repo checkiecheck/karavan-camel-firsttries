@@ -3,6 +3,8 @@
     - java.io.IOException
     - java.util.concurrent.TimeoutException
     - org.apache.camel.CamelExecutionException
+    handled:
+      constant: 'true'
     steps:
     - log: 'event=message-failed level=ERROR exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} index={{es.index}} failedEndpoint=${exchangeProperty.CamelFailureEndpoint} errorMessage=${exception.message}'
     - to:
@@ -13,8 +15,6 @@
           password: '{{rabbitmq.password}}'
           vhost: '{{rabbitmq.vhost}}'
           skipQueueDeclare: 'true'
-    - handled:
-        constant: 'true'
 
 - from:
     uri: rabbitmq://{{rabbitmq.host}}:{{rabbitmq.port}}/{{rabbitmq.exchange}}

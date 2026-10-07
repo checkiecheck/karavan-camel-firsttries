@@ -1,62 +1,114 @@
-- routeConfiguration:
-    id: rmq-error-handling
-    onException:
-    - onException:
-        exception:
-        - java.io.IOException
-        - java.util.concurrent.TimeoutException
-        - org.apache.camel.CamelExecutionException
-        handled:
-          constant: 'true'
-        steps:
-        - log: 'event=message-failed level=ERROR exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} index={{es.index}} failedEndpoint=${exchangeProperty.CamelFailureEndpoint} errorMessage=${exception.message}'
+- route:
+    id: rabbitmq-to-elastic
+    description: Consumeert berichten uit RabbitMQ en indexeert ze in Elasticsearch
+    errorHandler:
+      id: errorHandler-rmq
+      deadLetterChannel:
+        id: deadLetterChannel-rmq
+        deadLetterUri: direct:rabbitmq-error
+        redeliveryPolicy:
+          id: redeliveryPolicy-rmq
+          maximumRedeliveries: 3
+          redeliveryDelay: '2000'
+          retryAttemptedLogLevel: WARN
+        useOriginalMessage: true
+    from:
+      id: rabbitmq-from
+      uri: rabbitmq
+      parameters:
+        addresses: '{{rabbitmq.host}}:{{rabbitmq.port}}'
+        exchangeName: '{{rabbitmq.exchange}}'
+        queue: '{{rabbitmq.queue}}'
+        routingKey: '{{rabbitmq.routingKey}}'
+        username: '{{rabbitmq.username}}'
+        password: '{{rabbitmq.password}}'
+        vhost: '{{rabbitmq.vhost}}'
+        autoDelete: 'false'
+        declare: '{{rabbitmq.declare:false}}'
+        prefetchEnabled: 'true'
+        prefetchCount: '{{rabbitmq.prefetchCount:10}}'
+        consumers: '{{rabbitmq.consumers:1}}'
+      steps:
+        - setHeader:
+            id: set-correlation-id
+            name: X-Correlation-Id
+            expression:
+              simple:
+                id: simple-correlation
+                expression: '${exchangeId}'
+        - log:
+            id: log-received
+            message: 'event=message-received exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} routingKey=${header.rabbitmq.RoutingKey} queue={{rabbitmq.queue}}'
+            loggingLevel: INFO
+        - setHeader:
+            id: set-es-operation
+            name: ElasticsearchOperation
+            expression:
+              constant:
+                id: constant-es-op
+                expression: Index
+        - setHeader:
+            id: set-es-index
+            name: ElasticsearchIndex
+            expression:
+              constant:
+                id: constant-es-index
+                expression: '{{es.index}}'
+        - setHeader:
+            id: set-es-doc-id
+            name: ElasticsearchDocumentId
+            expression:
+              simple:
+                id: simple-doc-id
+                expression: '${header.X-Correlation-Id}'
         - to:
-            uri: rabbitmq://{{rabbitmq.host}}:{{rabbitmq.port}}/{{rabbitmq.dlx.exchange}}
+            id: index-in-elastic
+            uri: elasticsearch-rest-client
             parameters:
+              clusterName: '{{es.clusterName}}'
+              operation: Index
+              indexName: '{{es.index}}'
+              hostAddresses: '{{es.host}}'
+              user: '{{es.username}}'
+              password: '{{es.password}}'
+              connectionTimeout: '{{es.connectionTimeout:5000}}'
+              socketTimeout: '{{es.socketTimeout:30000}}'
+        - log:
+            id: log-indexed
+            message: 'event=message-indexed exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} index={{es.index}} documentId=${header.X-Correlation-Id}'
+            loggingLevel: INFO
+- route:
+    id: rabbitmq-error-route
+    description: Foutafhandeling - gestructureerde error-log en doorsturen naar dead-letter exchange
+    from:
+      id: rabbitmq-error-from
+      uri: direct
+      parameters:
+        name: rabbitmq-error
+      steps:
+        - log:
+            id: log-error-audit
+            message: 'event=message-failed level=ERROR exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} failedRoute=rabbitmq-to-elastic errorMessage=${exception.message}'
+            loggingLevel: ERROR
+        - setHeader:
+            id: set-dlx-routing-key
+            name: rabbitmq.RoutingKey
+            expression:
+              constant:
+                id: constant-dlx-key
+                expression: '{{rabbitmq.dlx.routingKey}}'
+        - to:
+            id: send-to-dlx
+            uri: rabbitmq
+            parameters:
+              addresses: '{{rabbitmq.host}}:{{rabbitmq.port}}'
+              exchangeName: '{{rabbitmq.dlx.exchange}}'
               routingKey: '{{rabbitmq.dlx.routingKey}}'
               username: '{{rabbitmq.username}}'
               password: '{{rabbitmq.password}}'
               vhost: '{{rabbitmq.vhost}}'
               skipQueueDeclare: 'true'
-
-- from:
-    uri: rabbitmq://{{rabbitmq.host}}:{{rabbitmq.port}}/{{rabbitmq.exchange}}
-    parameters:
-      queue: '{{rabbitmq.queue}}'
-      routingKey: '{{rabbitmq.routingKey}}'
-      username: '{{rabbitmq.username}}'
-      password: '{{rabbitmq.password}}'
-      vhost: '{{rabbitmq.vhost}}'
-      autoDelete: 'false'
-      declare: '{{rabbitmq.declare:false}}'
-      prefetchEnabled: 'true'
-      prefetchCount: '{{rabbitmq.prefetchCount:10}}'
-      consumers: '{{rabbitmq.consumers:1}}'
-    routeConfigurationId: rmq-error-handling
-    id: rabbitmq-to-elastic
-    group: integration
-    steps:
-    - setHeader:
-        name: X-Correlation-Id
-        simple: '${exchangeId}'
-    - log: 'event=message-received exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} routingKey=${header.rabbitmq.RoutingKey} queue={{rabbitmq.queue}}'
-    - setHeader:
-        name: ElasticsearchOperation
-        constant: 'Index'
-    - setHeader:
-        name: ElasticsearchIndex
-        constant: '{{es.index}}'
-    - setHeader:
-        name: ElasticsearchDocumentId
-        simple: '${header.X-Correlation-Id}'
-    - to:
-        uri: elasticsearch-rest-client:{{es.clusterName}}
-        parameters:
-          operation: 'Index'
-          index: '{{es.index}}'
-          hostAddresses: '{{es.host}}'
-          user: '{{es.username}}'
-          password: '{{es.password}}'
-          connectionTimeout: '{{es.connectionTimeout:5000}}'
-          socketTimeout: '{{es.socketTimeout:30000}}'
-    - log: 'event=message-indexed exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} index={{es.index}} documentId=${header.X-Correlation-Id}'
+        - log:
+            id: log-dlq-sent
+            message: 'event=message-dead-lettered exchangeId=${exchangeId} dlx={{rabbitmq.dlx.exchange}} routingKey={{rabbitmq.dlx.routingKey}}'
+            loggingLevel: WARN

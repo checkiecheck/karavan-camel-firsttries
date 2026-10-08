@@ -1,0 +1,40 @@
+# KARAVAN CAMEL YAML DSL - DEV-ONLY
+# Mock Elasticsearch-endpoint voor de Karavan/JBang dev-loop. Wordt NIET in de
+# container gebakken (Dockerfile kopieert alleen rabbitmq_elastic.camel.yaml
+# expliciet). JBang downloadt de netty-http component automatisch.
+#
+# Lokaal draaien (samen met de echte route, mock op poort 9200):
+#   ELASTICSEARCH_HOST=http://localhost:9200 camel run *.camel.yaml --dev
+- route:
+    id: mock-elastic-target-route
+    description: DEV-ONLY mock Elasticsearch - canned index-response, logt alles wat binnenkomt
+    from:
+      id: from-mock-es
+      uri: netty-http
+      parameters:
+        host: 0.0.0.0
+        port: '{{mock.es.port:9200}}'
+        protocol: HTTP
+        matchOnUriPrefix: true
+      steps:
+        - log:
+            id: log-mock-es-request
+            message: 'event=mock-es-request method=${header.CamelHttpMethod} uri=${header.CamelHttpUri} body=${body}'
+            loggingLevel: INFO
+        - setHeader:
+            id: set-mock-es-response-code
+            name: CamelHttpResponseCode
+            expression:
+              constant:
+                expression: '200'
+        - setHeader:
+            id: set-mock-es-content-type
+            name: Content-Type
+            expression:
+              constant:
+                expression: application/json
+        - setBody:
+            id: set-mock-es-response-body
+            expression:
+              simple:
+                expression: '{"result":"created","_index":"{{es.index}}","_id":"mock-1","status":201}'

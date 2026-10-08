@@ -1,0 +1,115 @@
+# rabbitmq_elastic/k8s/ â volledige manifesten voor de generieke monorepo-workflow.
+# Placeholder die de workflow substitueert:
+#   <IMAGE> -> ghcr.io/<owner>/<repo>/<app>:<sha>
+# Overige configuratie via env vars (ConfigMap hieronder).
+#
+# Let op: messaging-worker â GEEN Ingress/Kong nodig. Poort 8080 is alleen
+# voor de health-probes (quarkus-smallrye-health).
+
+# --- ConfigMap: per-app configuratie (vult envFrom in de Deployment) ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-elastic-config
+  namespace: integration
+data:
+  RABBITMQ_HOST: "rabbitmq.integration.svc.cluster.local"
+  RABBITMQ_PORT: "5672"
+  RABBITMQ_VHOST: "/"
+  RABBITMQ_EXCHANGE: "orders.events"
+  RABBITMQ_QUEUE: "orders-to-elastic"
+  RABBITMQ_ROUTING_KEY: "order.#"
+  RABBITMQ_DLX_EXCHANGE: "orders.events.dlx"
+  RABBITMQ_DLX_ROUTING_KEY: "dead"
+  RABBITMQ_DECLARE: "false"
+  RABBITMQ_PRQTECH_COUNT: "10"
+  RABBITMQ_CONSUMERS: "1"
+  ES_CLUSTER_NAME: "elastic-cluster"
+  ELASTICSEARCH_HOST: "http://elasticsearch.integration.svc.cluster.local:9200"
+  ELASTICSEARCH_INDEX: "orders"
+  ES_CONNECTION_TIMEOUT: "5000"
+  ES_SOCKET_TIMEOUT: "30000"
+  LOG_JSON: "true"
+  LOG_LEVEL: "INFO"
+  # Credentials staan NIET hier (ConfigMap is plain text in de repo):
+  # RABBITMQ_USERNAME/RABBITMQ_PASSWORD en ELASTICSEARCH_USERNAME/PASSWORD
+  # komen uit de Secret hieronder.
+---
+# --- Secret: credentials â allÃ©Ã©n extern vullen, NIET committen! ---
+# kubectl -n integration create secret generic rabbitmq-elastic-secrets \
+#   --from-literal=RABBITMQ_USERNAME='<user>' \
+#   --from-literal=RABBITMQ_PASSWORD='<pass>' \
+#   --from-literal=ELASTICSEARCH_USERNAME='<user>' \
+#   --from-literal=ELASTICSEARCH_PASSWORD='<pass>'
+apiVersion: v1
+kind: Secret
+metadata:
+  name: rabbitmq-elastic-secrets
+  namespace: integration
+type: Opaque
+# Bestaat alleen als referentie hier; echte waarden via kubectl create secret
+# of een external-secrets/sealed-secrets oplossing. Een lege Secret is prima:
+# ontbrekende env vars vallen terug op de safe defaults uit application.properties.
+stringData: {}
+---
+# --- Deployment ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: rabbitmq-elastic
+  namespace: integration
+  labels:
+    app: rabbitmq-elastic
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: rabbitmq-elastic
+  template:
+    metadata:
+      labels:
+        app: rabbitmq-elastic
+    spec:
+      containers:
+        - name: camel-route
+          image: <IMAGE>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: rabbitmq-elastic-config
+            - secretRef:
+                name: rabbitmq-elastic-secrets
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /q/health/live
+              port: 8080
+          readinessProbe:
+            httpGet:
+              path: /q/health/ready
+              port: 8080
+---
+# --- Service (alleen voor probes/interne diagnostiek, geen Ingress) ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rabbitmq-elastic-svc
+  namespace: integration
+  labels:
+    app: rabbitmq-elastic
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+  selector:
+    app: rabbitmq-elastic

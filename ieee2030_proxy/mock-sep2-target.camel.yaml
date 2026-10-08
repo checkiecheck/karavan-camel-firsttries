@@ -1,0 +1,40 @@
+# KARAVAN CAMEL YAML DSL - DEV-ONLY
+# Mock SEP2-backend voor de Karavan/JBang dev-loop. Wordt NIET in de container
+# gebakken (Dockerfile kopieert alleen ieee2030-proxy.camel.yaml expliciet).
+# Lokaal draaien:  camel run *.camel.yaml --dev
+# En dan de proxy-target naar deze mock sturen:
+#   IEEE2030_TARGET_BASE=http://localhost:9443 IEEE2030_TARGET_HOST=localhost \
+#   IEEE2030_TARGET_PORT=9443 IEEE2030_TARGET_TLS=false camel run *.camel.yaml --dev
+- route:
+    id: mock-sep2-target-route
+    description: DEV-ONLY mock SEP2-backend - canned responses, logt alles binnenkomt
+    from:
+      id: from-mock-sep2
+      uri: netty-http
+      parameters:
+        host: 0.0.0.0
+        port: '{{mock.sep2.port:9443}}'
+        protocol: HTTP
+        matchOnUriPrefix: true
+      steps:
+        - log:
+            id: log-mock-request
+            message: 'event=mock-sep2-request method=${header.CamelHttpMethod} path=${header.CamelHttpPath} body=${body}'
+            loggingLevel: INFO
+        - setHeader:
+            id: set-mock-response-code
+            name: CamelHttpResponseCode
+            expression:
+              constant:
+                value: '200'
+        - setHeader:
+            id: set-mock-content-type
+            name: Content-Type
+            expression:
+              constant:
+                value: application/json
+        - setBody:
+            id: set-mock-body-dcap
+            expression:
+              simple:
+                expression: '{"mrid":"mock-response","path":"${header.CamelHttpPath}","receivedAt":"${date:now:yyyy-MM-dd''T''HH:mm:ss}"}'

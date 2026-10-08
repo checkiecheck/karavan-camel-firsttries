@@ -4,9 +4,11 @@ WORKDIR /workspace
 COPY pom.xml .
 RUN mvn -B dependency:go-offline
 RUN mkdir -p src/main/resources
-COPY *.camel.yaml src/main/resources/
+# Expliciet de proxy-route; de DEV-mock (mock-sep2-target.camel.yaml) hoort
+# NIET in de productie-image.
+COPY ieee2030-proxy.camel.yaml src/main/resources/
 COPY application.properties src/main/resources/
-RUN mvn -B package -DskipTests
+RUN mvn -B package -DskipTests -Dmaven.test.skip=true
 
 # JVM-mode: quarkus-run.jar heeft een gewone JRE nodig.
 # (quarkus-micro-image is ALLEEN voor native executables - geen java binary!)

@@ -3,11 +3,10 @@ FROM docker.io/library/maven:3.9-eclipse-temurin-21 AS build
 WORKDIR /workspace
 COPY pom.xml .
 RUN mvn -B dependency:go-offline
-RUN mkdir -p src/main/resources
-# Expliciet de proxy-route; de DEV-mock (mock-sep2-target.camel.yaml) hoort
-# NIET in de productie-image.
-COPY ieee2030-proxy.camel.yaml src/main/resources/
-COPY application.properties src/main/resources/
+# Standaard Maven-layout: resources staan al op src/main/resources/camel/
+# (default discovery-locatie van camel-quarkus). De DEV-mock (root) wordt NIET
+# mee-gebuild; tests draaien in CI vóór de image-build.
+COPY src ./src
 RUN mvn -B package -DskipTests -Dmaven.test.skip=true
 
 # JVM-mode: quarkus-run.jar heeft een gewone JRE nodig.

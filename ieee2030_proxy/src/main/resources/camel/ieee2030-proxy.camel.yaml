@@ -1,0 +1,152 @@
+# KARAVAN CAMEL YAML DSL
+- route:
+    id: ieee2030-proxy-route
+    description: IEEE 2030.5 (SEP2) doorgeefluik - logt request/response en stuurt door naar de SEP2-server
+    errorHandler:
+      id: errorHandler-ieee2030
+      deadLetterChannel:
+        id: deadLetterChannel-ieee2030
+        deadLetterUri: direct:ieee2030-error
+        redeliveryPolicy:
+          id: redeliveryPolicy-ieee2030
+          maximumRedeliveries: 3
+          redeliveryDelay: '2000'
+          retryAttemptedLogLevel: WARN
+        useOriginalMessage: true
+    from:
+      id: from-ieee2030-proxy
+      uri: netty-http
+      parameters:
+        host: 0.0.0.0
+        port: '{{ieee2030.proxy.port:8080}}'
+        protocol: HTTP
+        matchOnUriPrefix: true
+      steps:
+        - setHeader:
+            id: set-correlation-id
+            name: X-Correlation-Id
+            expression:
+              simple:
+                expression: '${header.X-Correlation-Id ?: ${exchangeId}}'
+        - choice:
+            id: choice-client-cn-check
+            when:
+              - id: when-no-client-cn
+                simple: '${header.{{ieee2030.client.cn.header:X-Client-CN}}} == null || ${header.{{ieee2030.client.cn.header:X-Client-CN}}} == ""'
+                steps:
+                  - log:
+                      id: log-client-cn-missing
+                      message: 'event=ieee2030-auth-rejected reason=missing-client-cn method=${header.CamelHttpMethod} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                      loggingLevel: WARN
+                  - setHeader:
+                      id: set-response-403
+                      name: CamelHttpResponseCode
+                      expression:
+                        constant:
+                          value: '403'
+                  - setHeader:
+                      id: set-response-content-type
+                      name: Content-Type
+                      expression:
+                        constant:
+                          value: application/json
+                  - setBody:
+                      id: set-body-rejected
+                      expression:
+                        constant:
+                          value: '{"error":"client certificate required"}'
+                  - stop:
+                      id: stop-rejected
+            otherwise:
+              id: otherwise-cn-present
+              steps:
+                - choice:
+                    id: choice-cn-allowlist
+                    when:
+                      - id: when-cn-not-allowed
+                        simple: "'{{ieee2030.cn.allowlist:}}' != '' and ${header.{{ieee2030.client.cn.header:X-Client-CN}}} not in '{{ieee2030.cn.allowlist:}}'"
+                        steps:
+                          - log:
+                              id: log-client-cn-not-allowed
+                              message: 'event=ieee2030-auth-rejected reason=cn-not-in-allowlist clientCN=${header.{{ieee2030.client.cn.header:X-Client-CN}}} method=${header.CamelHttpMethod} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                              loggingLevel: WARN
+                          - setHeader:
+                              id: set-response-403-allowlist
+                              name: CamelHttpResponseCode
+                              expression:
+                                constant:
+                                  value: '403'
+                          - setHeader:
+                              id: set-response-content-type-allowlist
+                              name: Content-Type
+                              expression:
+                                constant:
+                                  value: application/json
+                          - setBody:
+                              id: set-body-rejected-allowlist
+                              expression:
+                                constant:
+                                  value: '{"error":"client not authorized"}'
+                          - stop:
+                              id: stop-rejected-allowlist
+                    otherwise:
+                      id: otherwise-cn-allowed
+                      steps:
+                        - log:
+                            id: log-request-received
+                            message: 'event=ieee2030-request direction=in method=${header.CamelHttpMethod} path=${header.CamelHttpPath} clientCN=${header.{{ieee2030.client.cn.header:X-Client-CN}}:-unknown} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                            loggingLevel: INFO
+        - removeHeaders:
+            id: remove-camel-http-uri
+            pattern: CamelHttpUri
+        - setHeader:
+            id: set-target-uri
+            name: CamelHttpUri
+            expression:
+              simple:
+                expression: '{{ieee2030.target.base:https://127.0.0.1:8443}}${header.CamelHttpPath}'
+        - to:
+            id: to-ieee2030-target
+            uri: netty-http
+            parameters:
+              host: '{{ieee2030.target.host:127.0.0.1}}'
+              port: '{{ieee2030.target.port:8443}}'
+              ssl: '{{ieee2030.target.tls:true}}'
+        - log:
+            id: log-response-received
+            message: 'event=ieee2030-response direction=out status=${header.CamelHttpResponseCode} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+            loggingLevel: INFO
+        - choice:
+            id: choice-response-status
+            when:
+              - id: when-server-error
+                simple: '${header.CamelHttpResponseCode} >= 500'
+                steps:
+                  - log:
+                      id: log-upstream-error
+                      message: 'event=ieee2030-upstream-error status=${header.CamelHttpResponseCode} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                      loggingLevel: WARN
+            otherwise:
+              id: otherwise-response-ok
+              steps:
+                - log:
+                    id: log-response-ok
+                    message: 'event=ieee2030-response-ok status=${header.CamelHttpResponseCode} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id}'
+                    loggingLevel: INFO
+- route:
+    id: ieee2030-error-route
+    description: Gestructureerde foutlogging en dead-lettering van mislukte IEEE 2030.5-doorgeefverzoeken
+    from:
+      id: from-ieee2030-error
+      uri: direct
+      parameters:
+        name: ieee2030-error
+      steps:
+        - log:
+            id: log-error-received
+            message: 'event=ieee2030-error error=${exception.message} method=${header.CamelHttpMethod} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+            loggingLevel: ERROR
+        - log:
+            id: log-dead-lettered
+            message: 'event=ieee2030-dead-lettered correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId} reason=max-redeliveries-exceeded'
+            loggingLevel: ERROR

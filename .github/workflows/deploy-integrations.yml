@@ -5,6 +5,12 @@ on:
     branches:
       - main
       - master
+  workflow_dispatch:
+    inputs:
+      apps:
+        description: "Integraties om te forceren (komma-gescheiden), leeg = changed-detect"
+        required: false
+        default: ''
 
 # GHCR bij de repo (ghcr.io/<owner>/<repo>); een klant die lokale/air-gapped
 # images wil (bv. politie) krijgt dezelfde image later via een aparte
@@ -32,14 +38,18 @@ jobs:
       - name: Detecteer gewijzigde integraties
         id: detect
         run: |
-          CHANGED_DIRS=$(git diff --name-only HEAD^ HEAD | awk -F'/' '{print $1}' | sort -u)
-          # filter op echte integratie-directories (application.properties aanwezig)
-          VALID=""
-          for d in $CHANGED_DIRS; do
-            [ -f "$d/application.properties" ] && VALID="$VALID $d"
-          done
+          # Handmatige dispatch met apps-input wint; anders changed-detect
+          if [ -n "${{ inputs.apps }}" ]; then
+            VALID=$(echo "${{ inputs.apps }}" | tr ',' ' ' | xargs)
+          else
+            CHANGED_DIRS=$(git diff --name-only HEAD^ HEAD | awk -F'/' '{print $1}' | sort -u)
+            VALID=""
+            for d in $CHANGED_DIRS; do
+              [ -f "$d/application.properties" ] && VALID="$VALID $d"
+            done
+          fi
           echo "changed-dirs=$VALID" >> "$GITHUB_OUTPUT"
-          echo "Gewijzigde integraties:$VALID"
+          echo "Integraties voor deze run:$VALID"
 
       - name: Registry login (GHCR bij de repo)
         if: steps.detect.outputs.changed-dirs != ''
@@ -56,15 +66,6 @@ jobs:
             echo "=== Testing $APP_NAME ==="
             # 1. JBang- vs pom-consistentiecheck
             bash scripts/check-jbang-deps.sh "$APP_NAME"
-
-            # 1b. Productie-route(s) op het test-classpath zetten:
-            #     camel-quarkus laadt routes van classpath:camel/*.yaml,
-            #     in de repo liggen ze plat in de integratie-directory.
-            #     DEV-mocks (mock-*.camel.yaml) NIET meenemen.
-            mkdir -p "$APP_NAME/src/main/resources/camel"
-            for f in "$APP_NAME"/*.camel.yaml; do
-              case "$(basename "$f")" in mock-*) ;; *) cp "$f" "$APP_NAME/src/main/resources/camel/" ;; esac
-            done
 
             # 2. Route-tests (JUnit/CamelQuarkusTestSupport): faalt een test,
             #    dan stopt de pipeline HIER - geen image-build, geen push, geen deploy

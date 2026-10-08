@@ -36,28 +36,22 @@
   </dependencyManagement>
 
   <dependencies>
-    <!-- Quarkus core -->
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-arc</artifactId>
     </dependency>
-    <!-- Health endpoints (/q/health/live en /q/health/ready voor de probes) -->
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-smallrye-health</artifactId>
     </dependency>
-    <!-- Camel YAML DSL (routes *.camel.yaml) -->
     <dependency>
       <groupId>org.apache.camel.quarkus</groupId>
       <artifactId>camel-quarkus-core</artifactId>
     </dependency>
-    <!-- netty-http: consumer (proxy-listener) EN producer (SEP2-target) -->
     <dependency>
       <groupId>org.apache.camel.quarkus</groupId>
       <artifactId>camel-quarkus-netty-http</artifactId>
     </dependency>
-
-    <!-- Tests: route-tests draaien mee in de CI-build (mvn package) -->
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-junit5</artifactId>
@@ -71,6 +65,27 @@
   </dependencies>
 
   <build>
+    <!-- Karavan-vereiste: routes + properties in de ROOT van de integratie.
+         Deze extra resource-mapping zet ze tijdens mvn test/package op de
+         classpath-ROOT, zodat camel-quarkus ze laadt zonder dat de
+         bestandslocatie verandert. -->
+    <resources>
+      <resource>
+        <directory>.</directory>
+        <includes>
+          <include>*.camel.yaml</include>
+          <include>application.properties</include>
+        </includes>
+      </resource>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+    </resources>
+    <testResources>
+      <testResource>
+        <directory>src/test/resources</directory>
+      </testResource>
+    </testResources>
     <plugins>
       <plugin>
         <groupId>${quarkus.platform.group-id}</groupId>

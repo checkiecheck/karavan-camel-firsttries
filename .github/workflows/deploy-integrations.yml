@@ -57,6 +57,15 @@ jobs:
             # 1. JBang- vs pom-consistentiecheck
             bash scripts/check-jbang-deps.sh "$APP_NAME"
 
+            # 1b. Productie-route(s) op het test-classpath zetten:
+            #     camel-quarkus laadt routes van classpath:camel/*.yaml,
+            #     in de repo liggen ze plat in de integratie-directory.
+            #     DEV-mocks (mock-*.camel.yaml) NIET meenemen.
+            mkdir -p "$APP_NAME/src/main/resources/camel"
+            for f in "$APP_NAME"/*.camel.yaml; do
+              case "$(basename "$f")" in mock-*) ;; *) cp "$f" "$APP_NAME/src/main/resources/camel/" ;; esac
+            done
+
             # 2. Route-tests (JUnit/CamelQuarkusTestSupport): faalt een test,
             #    dan stopt de pipeline HIER - geen image-build, geen push, geen deploy
             docker run --rm \

@@ -51,10 +51,17 @@
       <groupId>org.apache.camel.quarkus</groupId>
       <artifactId>camel-quarkus-core</artifactId>
     </dependency>
-    <!-- rabbitmq: consumer (bron) EN producer (dead-letter exchange) -->
+    <!-- YAML DSL loader: zonder deze wordt *.camel.yaml NIET geladen
+         ("Cannot find RoutesBuilderLoader supporting file extension camel.yaml") -->
     <dependency>
       <groupId>org.apache.camel.quarkus</groupId>
-      <artifactId>camel-quarkus-rabbitmq</artifactId>
+      <artifactId>camel-quarkus-yaml-dsl</artifactId>
+    </dependency>
+    <!-- spring-rabbitmq: op Quarkus heet de RabbitMQ-component camel-quarkus-spring-rabbitmq
+         (consumer + DLX-producer); connectie loopt via de CachingConnectionFactory-bean -->
+    <dependency>
+      <groupId>org.apache.camel.quarkus</groupId>
+      <artifactId>camel-quarkus-spring-rabbitmq</artifactId>
     </dependency>
     <!-- elasticsearch-rest-client: producer (indexeren) -->
     <dependency>

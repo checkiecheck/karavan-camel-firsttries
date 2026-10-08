@@ -1,7 +1,7 @@
 # rabbitmq_elastic
 
-RabbitMQ â Elasticsearch worker: Apache Camel (Quarkus) die berichten van een
-RabbitMQ-queue consumeert en in Elasticsearch indexeert â met structured JSON-logging (Filebeat-ready), parametrisering via env vars en een dead-letter-exchange als foutafhandeling.
+RabbitMQ → Elasticsearch worker: Apache Camel (Quarkus) die berichten van een
+RabbitMQ-queue consumeert en in Elasticsearch indexeert — met structured JSON-logging (Filebeat-ready), parametrisering via env vars en een dead-letter-exchange als foutafhandeling.
 
 ## Architectuur
 
@@ -19,24 +19,32 @@ Elasticsearch (index: orders)
 
 ## Bestanden
 
-- `rabbitmq_elastic.camel.yaml` â Camel YAML DSL (Karavan-formaat): hoofdroute
-  + error-route (dead letter channel, 3 redeliveries).
-- `mock-elastic-target.camel.yaml` â DEV-ONLY mock Elasticsearch-endpoint
+- `rabbitmq_elastic.camel.yaml` — Camel YAML DSL (Karavan-formaat): hoofdroute
+  + error-route (dead letter channel, 3 redeliveries). De RabbitMQ-component is
+  **spring-rabbitmq**: op Quarkus bestaat géén `camel-quarkus-rabbitmq` (patroon 11).
+  Connectie-gegevens (host/port/credentials/vhost) staan níet in de endpoint-URI
+  maar in de `CachingConnectionFactory`-bean (zie hieronder).
+- `mock-elastic-target.camel.yaml` — DEV-ONLY mock Elasticsearch-endpoint
   (netty-http op :9200) voor de Karavan/JBang-loop. Wordt NIET in de container
   gebakken (zie Dockerfile).
-- `src/test/java/checkiecheck/rabbitmq/RabbitmqElasticRouteTest.java` â
+- `src/test/java/checkiecheck/rabbitmq/RabbitmqElasticRouteTest.java` —
   CI-route-tests: dezelfde scenarios als hieronder handmatig, maar repeateerbaar in de build.
-- `application.properties` â configuratie; alle waarden via env vars met safe defaults.
-- `pom.xml` â Quarkus 3.15 + camel-quarkus-rabbitmq/elasticsearch-rest-client/core + junit5 (test).
-- `Dockerfile` â multi-stage Maven build â eclipse-temurin JRE, poort 8080 (health only).
-- `k8s/manifests.yaml` â ConfigMap, Secret-referentie, Deployment (probes, envFrom),
+- `application.properties` — configuratie; alle waarden via env vars met safe defaults.
+- `src/main/java/checkiecheck/rabbitmq/RabbitMqConnectionFactoryProducer.java` —
+  CDI-producer van de `CachingConnectionFactory` (spring-rabbitmq verplicht zo'n
+  bean in de registry; autowired als enige instantie).
+- `rabbitmq-beans.java` — DEV-ONLY: zelfde ConnectionFactory voor de JBang/Karavan-loop.
+- `pom.xml` — Quarkus 3.15 + camel-quarkus-spring-rabbitmq/yaml-dsl/elasticsearch-rest-client/core + junit5 (test).
+  `camel-quarkus-yaml-dsl` is verplicht: zonder loader wordt `*.camel.yaml` niet geladen.
+- `Dockerfile` — multi-stage Maven build → eclipse-temurin JRE, poort 8080 (health only).
+- `k8s/manifests.yaml` — ConfigMap, Secret-referentie, Deployment (probes, envFrom),
   Service. GEEN Ingress: messaging-worker.
 
-## Dev-loop (Karavan / Camel JBang) â voor integratiespecialisten
+## Dev-loop (Karavan / Camel JBang) — voor integratiespecialisten
 
 Lokaal heb je alleen RabbitMQ nodig; Elasticsearch simuleer je met de mock.
 
-1. **RabbitMQ starten** (Ã©C©nmalig):
+1. **RabbitMQ starten** (éénmalig):
 
    ```bash
    docker run -d --name rabbitmq -p 5672:5672 -p 15672:15672 rabbitmq:3-management
@@ -45,11 +53,15 @@ Lokaal heb je alleen RabbitMQ nodig; Elasticsearch simuleer je met de mock.
 2. **Route + mock starten** (in deze directory):
 
    ```bash
-   ELASTICSEARCH_HOST=http://localhost:9200 camel run *.camel.yaml --dev
+   ELASTICSEARCH_HOST=http://localhost:9200 \
+     camel run rabbitmq_elastic.camel.yaml rabbitmq-beans.java mock-elastic-target.camel.yaml --dev
    ```
 
+   `rabbitmq-beans.java` is nodig omdat ook in JBang de spring-rabbitmq-component
+   een ConnectionFactory-bean vereist (de Quarkus-container gebruikt de CDI-producer).
+
    `--dev` herlaadt automatisch bij opslaan in Karavan. De console toont live de
-   structured events (`event=message-received`, `event=mock-es-request`, â¦).
+   structured events (`event=message-received`, `event=mock-es-request`, …).
 
 3. **Scenarios naspelen** (dit zijn exact de CI-tests):
 
@@ -61,7 +73,7 @@ Lokaal heb je alleen RabbitMQ nodig; Elasticsearch simuleer je met de mock.
    #             event=mock-es-request uri=/orders/_doc/<exchangeId>
    #             event=message-indexed index=orders
 
-   # b) ES "uitval" simuleren: mock stoppen (Ctrl-C niet nodig â tweede terminal)
+   # b) ES "uitval" simuleren: mock stoppen (Ctrl-C niet nodig — tweede terminal)
    #    en opnieuw publiceren: 3 redeliveries (2s interval), dan DLX
    docker exec rabbitmq rabbitmqadmin publish exchange=orders.events \
      routing_key=order.created payload='{"order":"fail"}'
@@ -70,8 +82,8 @@ Lokaal heb je alleen RabbitMQ nodig; Elasticsearch simuleer je met de mock.
    #    check: docker exec rabbitmq rabbitmqadmin list queues name messages
    ```
 
-4. **Wijzigingen aan de route** zijn meteen zichtbaar: Karavan opslaan â
-   herlaad â publiceer opnieuw.
+4. **Wijzigingen aan de route** zijn meteen zichtbaar: Karavan opslaan →
+   herlaad → publiceer opnieuw.
 
 ## Tests (CI)
 
@@ -105,7 +117,7 @@ Het bijihorende `rabbitmqadmin publish`-commando uit de dev-loop hierboven.
 1. Wijzig de route (`.camel.yaml`) of configuratie; test via de dev-loop hierboven.
 2. Voeg een CI-test tod als je nieuw gedrag bouwt (testclass in `src/test/java`).
 3. Commit + push naar `main`: de monorepo-workflow draait de dependency-check
-   (JBang â pom) en de route-tests, bouwt de image
+   (JBang ↔ pom) en de route-tests, bouwt de image
    (`ghcr.io/<owner>/<repo>/rabbitmq_elastic:<sha>`) en deployt naar het
    test-cluster (manifesten uit `k8s/`).
 4. Zie Actions-tab voor de run; faalt een test dan draai hem lokaal na (`mvn test`).

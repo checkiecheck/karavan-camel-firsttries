@@ -1,3 +1,10 @@
+# RabbitMQ -> Elasticsearch integratie (spring-rabbitmq component)
+#
+# Op Quarkus bestaat er geen camel-quarkus-rabbitmq extensie; de
+# RabbitMQ-component voor Quarkus is spring-rabbitmq (patroon 11:
+# componenten zonder Quarkus-extensie vervang je door het equivalent).
+# Connectie-gegevens (host/port/credentials/vhost) staan NIET in de URI,
+# maar in de CachingConnectionFactory-bean (RabbitMqConnectionFactoryProducer).
 - route:
     id: rabbitmq-to-elastic
     description: Consumeert berichten uit RabbitMQ en indexeert ze in Elasticsearch
@@ -14,20 +21,14 @@
         useOriginalMessage: true
     from:
       id: rabbitmq-from
-      uri: rabbitmq
+      uri: spring-rabbitmq
       parameters:
-        addresses: '{{rabbitmq.host}}:{{rabbitmq.port}}'
         exchangeName: '{{rabbitmq.exchange}}'
-        queue: '{{rabbitmq.queue}}'
+        queues: '{{rabbitmq.queue}}'
         routingKey: '{{rabbitmq.routingKey}}'
-        username: '{{rabbitmq.username}}'
-        password: '{{rabbitmq.password}}'
-        vhost: '{{rabbitmq.vhost}}'
-        autoDelete: 'false'
-        declare: '{{rabbitmq.declare:false}}'
-        prefetchEnabled: 'true'
+        autoDeclare: '{{rabbitmq.declare:false}}'
         prefetchCount: '{{rabbitmq.prefetchCount:10}}'
-        consumers: '{{rabbitmq.consumers:1}}'
+        concurrentConsumers: '{{rabbitmq.consumers:1}}'
       steps:
         - setHeader:
             id: set-correlation-id
@@ -38,7 +39,7 @@
                 expression: '${exchangeId}'
         - log:
             id: log-received
-            message: 'event=message-received exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} routingKey=${header.rabbitmq.RoutingKey} queue={{rabbitmq.queue}}'
+            message: 'event=message-received exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} routingKey=${header.CamelSpringRabbitmqRoutingKey} queue={{rabbitmq.queue}}'
             loggingLevel: INFO
         - setHeader:
             id: set-es-operation
@@ -46,7 +47,7 @@
             expression:
               constant:
                 id: constant-es-op
-                expression: Index
+                expression: INDEX_OR_UPDATE
         - setHeader:
             id: set-es-index
             name: ElasticsearchIndex
@@ -66,9 +67,9 @@
             uri: elasticsearch-rest-client
             parameters:
               clusterName: '{{es.clusterName}}'
-              operation: Index
+              operation: INDEX_OR_UPDATE
               indexName: '{{es.index}}'
-              hostAddresses: '{{es.host}}'
+              hostAddressesList: '{{es.host}}'
               user: '{{es.username}}'
               password: '{{es.password}}'
               connectionTimeout: '{{es.connectionTimeout:5000}}'
@@ -90,24 +91,15 @@
             id: log-error-audit
             message: 'event=message-failed level=ERROR exchangeId=${exchangeId} correlationId=${header.X-Correlation-Id} failedRoute=rabbitmq-to-elastic errorMessage=${exception.message}'
             loggingLevel: ERROR
-        - setHeader:
-            id: set-dlx-routing-key
-            name: rabbitmq.RoutingKey
-            expression:
-              constant:
-                id: constant-dlx-key
-                expression: '{{rabbitmq.dlx.routingKey}}'
         - to:
             id: send-to-dlx
-            uri: rabbitmq
+            uri: spring-rabbitmq
             parameters:
-              addresses: '{{rabbitmq.host}}:{{rabbitmq.port}}'
               exchangeName: '{{rabbitmq.dlx.exchange}}'
               routingKey: '{{rabbitmq.dlx.routingKey}}'
-              username: '{{rabbitmq.username}}'
-              password: '{{rabbitmq.password}}'
-              vhost: '{{rabbitmq.vhost}}'
-              skipQueueDeclare: 'true'
+              skipDeclareQueue: 'true'
+              skipDeclareExchange: 'true'
+              skipBindQueue: 'true'
         - log:
             id: log-dlq-sent
             message: 'event=message-dead-lettered exchangeId=${exchangeId} dlx={{rabbitmq.dlx.exchange}} routingKey={{rabbitmq.dlx.routingKey}}'

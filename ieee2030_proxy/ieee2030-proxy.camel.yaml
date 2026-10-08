@@ -27,12 +27,12 @@
             name: X-Correlation-Id
             expression:
               simple:
-                expression: '${header.X-Correlation-Id:-${exchangeId}}'
+                expression: '${header.X-Correlation-Id ?: ${exchangeId}}'
         - choice:
             id: choice-client-cn-check
             when:
               - id: when-no-client-cn
-                simple: '${header.{{ieee2030.client.cn.header:X-Client-CN}}:-} == ""'
+                simple: '${header.{{ieee2030.client.cn.header:X-Client-CN}}} == null || ${header.{{ieee2030.client.cn.header:X-Client-CN}}} == ""'
                 steps:
                   - log:
                       id: log-client-cn-missing

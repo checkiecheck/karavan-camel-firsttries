@@ -28,18 +28,11 @@
             expression:
               simple:
                 expression: '${header.X-Correlation-Id ?: ${exchangeId}}'
-        - setHeader:
-            id: set-client-cn-normalized
-            name: ClientCN
-            description: Kopieer de trust-header (naam configureerbaar) naar een vaste header - daarna werkt de hele route alleen met ClientCN
-            expression:
-              simple:
-                expression: '${header.{{ieee2030.client.cn.header:X-Client-CN}}}'
         - choice:
             id: choice-client-cn-check
             when:
               - id: when-no-client-cn
-                simple: '${header.ClientCN} == null || ${header.ClientCN} == ""'
+                simple: '${header.{{ieee2030.client.cn.header:X-Client-CN}}} == null || ${header.{{ieee2030.client.cn.header:X-Client-CN}}} == ""'
                 steps:
                   - log:
                       id: log-client-cn-missing
@@ -49,16 +42,20 @@
                       id: set-response-403
                       name: CamelHttpResponseCode
                       expression:
-                        constant: '403'
+                        constant:
+                          value: '403'
                   - setHeader:
                       id: set-response-content-type
                       name: Content-Type
                       expression:
-                        constant: application/json
+                        constant:
+     
+                     value: application/json
                   - setBody:
                       id: set-body-rejected
                       expression:
-                        constant: '{"error":"client certificate required"}'
+                        constant:
+                          value: '{"error":"client certificate required"}'
                   - stop:
                       id: stop-rejected
             otherwise:
@@ -68,26 +65,30 @@
                     id: choice-cn-allowlist
                     when:
                       - id: when-cn-not-allowed
-                        simple: "'{{ieee2030.cn.allowlist:}}' != '' and ${header.ClientCN} not in '{{ieee2030.cn.allowlist:}}'"
+                        simple: "'{{ieee2030.cn.allowlist:}}' != '' and ${header.{{ieee2030.client.cn.header:X-Client-CN}}} not in '{{ieee2030.cn.allowlist:}}'"
                         steps:
                           - log:
                               id: log-client-cn-not-allowed
-                              message: 'event=ieee2030-auth-rejected reason=cn-not-in-allowlist clientCN=${header.ClientCN} method=${header.CamelHttpMethod} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                              message: 'event=ieee2030-auth-rejected reason=cn-not-in-allowlist clientCN=${header.{{ieee2030.client.cn.header:X-Client-CN}}} method=${header.CamelHttpMethod} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
                               loggingLevel: WARN
                           - setHeader:
                               id: set-response-403-allowlist
                               name: CamelHttpResponseCode
                               expression:
-                                constant: '403'
+                                constant:
+                                  value: '403'
                           - setHeader:
                               id: set-response-content-type-allowlist
                               name: Content-Type
                               expression:
-                                constant: application/json
+                                constant:
+                                  value: application/json
                           - setBody:
                               id: set-body-rejected-allowlist
                               expression:
-                                constant: '{"error":"client not authorized"}'
+                                constant:
+                                  value: '{"error":"cl
+ient not authorized"}'
                           - stop:
                               id: stop-rejected-allowlist
                     otherwise:
@@ -95,7 +96,7 @@
                       steps:
                         - log:
                             id: log-request-received
-                            message: 'event=ieee2030-request direction=in method=${header.CamelHttpMethod} path=${header.CamelHttpPath} clientCN=${header.ClientCN} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                            message: 'event=ieee2030-request direction=in method=${header.CamelHttpMethod} path=${header.CamelHttpPath} clientCN=${header.{{ieee2030.client.cn.header:X-Client-CN}}:-unknown} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
                             loggingLevel: INFO
         - removeHeaders:
             id: remove-camel-http-uri
@@ -110,6 +111,7 @@
             id: to-ieee2030-target
             uri: netty-http
             parameters:
+              protocol: '{{ieee2030.target.protocol:https}}'
               host: '{{ieee2030.target.host:127.0.0.1}}'
               port: '{{ieee2030.target.port:8443}}'
               ssl: '{{ieee2030.target.tls:true}}'
@@ -127,6 +129,7 @@
                       id: log-upstream-error
                       message: 'event=ieee2030-upstream-error status=${header.CamelHttpResponseCode} path=${header.CamelHttpPath} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
                       loggingLevel: WARN
+
             otherwise:
               id: otherwise-response-ok
               steps:

@@ -52,6 +52,17 @@
       <groupId>org.apache.camel.quarkus</groupId>
       <artifactId>camel-quarkus-netty-http</artifactId>
     </dependency>
+    <!-- YAML DSL: VERPLICHT voor *.camel.yaml-routes. Zonder deze extensie:
+         "Cannot find RoutesBuilderLoader ... camel.yaml" (ook in productie!) -->
+    <dependency>
+      <groupId>org.apache.camel.quarkus</groupId>
+      <artifactId>camel-quarkus-yaml-dsl</artifactId>
+    </dependency>
+    <!-- Structured JSON console logging (quarkus.log.console.json) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-logging-json</artifactId>
+    </dependency>
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-junit5</artifactId>

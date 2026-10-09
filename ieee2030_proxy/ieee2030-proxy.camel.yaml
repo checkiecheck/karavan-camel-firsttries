@@ -31,10 +31,10 @@
         - setHeader:
             id: set-client-cn-normalized
             name: ClientCN
-            description: Kopieer de trust-header (naam configureerbaar) naar een vaste header - daarna werkt de hele route alleen met ClientCN
+            description: Kopieer de X-Client-CN trust-header (gezet door Kong, zie kong.conf/patroon 13) naar vaste ClientCN-header - de rest van de route werkt alleen met ClientCN
             expression:
               simple:
-                expression: '${header.{{ieee2030.client.cn.header:X-Client-CN}}}'
+                expression: '${header.X-Client-CN}'
         - choice:
             id: choice-client-cn-check
             when:
@@ -68,7 +68,7 @@
                     id: choice-cn-allowlist
                     when:
                       - id: when-cn-not-allowed
-                        simple: "'{{ieee2030.cn.allowlist:}}' != '' and ${header.ClientCN} not in '{{ieee2030.cn.allowlist:}}'"
+                        simple: "'{{ieee2030.cn.allowlist}}' != '' && ${header.ClientCN} not in '{{ieee2030.cn.allowlist}}'"
                         steps:
                           - log:
                               id: log-client-cn-not-allowed

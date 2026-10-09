@@ -19,7 +19,7 @@
       parameters:
         host: 0.0.0.0
         port: '{{ieee2030.proxy.port:8080}}'
-        protocol: HTTP
+        protocol: http
         matchOnUriPrefix: true
       steps:
         - setHeader:

@@ -35,13 +35,34 @@
       steps:
         # Correlatie: een MEEGEGEVEN X-Correlation-Id (vanuit de ebms-adapter,
         # via de RabbitMQ-headers) blijft behouden; anders exchangeId-fallback.
-        - setHeader:
-            id: set-correlation-id
-            name: X-Correlation-Id
-            expression:
-              simple:
-                id: simple-correlation-demo
-                expression: '${header.X-Correlation-Id ?: ${exchangeId}}'
+        # Let op: elvis met geneste expressie ('${header.X ?: ${exchangeId}}')
+        # evalueert in Camel 4.8 naar null - daarom een expliciete choice-fallback.
+        - choice:
+            id: choice-correlation-id-demo
+            when:
+              - id: when-geen-correlation-id-demo
+                expression:
+                  simple:
+                    id: simple-geen-correlation-id
+                    expression: '${header.X-Correlation-Id} == null'
+                steps:
+                  - setHeader:
+                      id: set-correlation-id-fallback
+                      name: X-Correlation-Id
+                      expression:
+                        simple:
+                          id: simple-correlation-fallback
+                          expression: '${exchangeId}'
+            otherwise:
+              id: otherwise-correlation-id-bestaat-demo
+              steps:
+                - setHeader:
+                    id: set-correlation-id-preserve
+                    name: X-Correlation-Id
+                    expression:
+                      simple:
+                        id: simple-correlation-preserve
+                        expression: '${header.X-Correlation-Id}'
         - log:
             id: log-received-demo
             message: 'event=message-received app=demo queue={{ebms.demo.queue}} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'

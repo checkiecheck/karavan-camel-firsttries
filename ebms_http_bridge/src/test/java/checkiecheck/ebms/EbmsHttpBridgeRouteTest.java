@@ -9,7 +9,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 import io.quarkus.test.junit.QuarkusTest;
 import org.apache.camel.CamelContext;
+import org.apache.camel.Exchange;
 import org.apache.camel.builder.AdviceWith;
+import org.apache.camel.builder.ExchangeBuilder;
 import org.apache.camel.quarkus.test.CamelQuarkusTestSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -28,9 +30,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * Bewijzen (keuzes uit VOORSTEL.md):
  *   1. 2xx     -> afgeleverd (bericht + correlatie-header bij de app)
- *   2. 5xx     -> 3 redeliveries (4 pogingen) -> error-route -> DLX + notify
- *   3. netwerkfout -> zelfde pad als 5xx
- *   4. 4xx     -> GEEN redelivery (1 poging), direct error-route -> DLX + notify
+ *   2. 2xx     -> een MEEGEGEVEN X-Correlation-Id wint van de exchangeId-fallback
+ *   3. 5xx     -> 3 redeliveries (4 pogingen) -> error-route -> DLX + notify
+ *   4. netwerkfout -> zelfde pad als 5xx
+ *   5. 4xx     -> GEEN redelivery (1 poging), direct error-route -> DLX + notify
+ *   6. 4xx     -> dead-letter behoudt de X-Correlation-Id (traceerbaarheid)
  */
 @QuarkusTest
 class EbmsHttpBridgeRouteTest extends CamelQuarkusTestSupport {
@@ -38,6 +42,7 @@ class EbmsHttpBridgeRouteTest extends CamelQuarkusTestSupport {
     static final AtomicReference<String> deliveredBody = new AtomicReference<>();
     static final AtomicReference<Object> deliveredCorrelationId = new AtomicReference<>();
     static final AtomicReference<String> deadLetteredBody = new AtomicReference<>();
+    static final AtomicReference<Object> deadLetteredCorrelationId = new AtomicReference<>();
     static final AtomicInteger attempts = new AtomicInteger();
     /** De Quarkus-app start 1x per testklasse; advice dus ook maar 1x. */
     static final AtomicBoolean advised = new AtomicBoolean(false);
@@ -57,7 +62,7 @@ class EbmsHttpBridgeRouteTest extends CamelQuarkusTestSupport {
                 //   geen X-Test-Respond header        -> 2xx (afgeleverd)
                 //   X-Test-Respond=network-error     -> connectiefout (redelivery)
                 //   X-Test-Respond=500               -> 5xx (set header + throw, zoals de echte
-//                                          EbmsDeliveryProcessor: redelivery)
+                //                                          EbmsDeliveryProcessor: redelivery)
                 //   X-Test-Respond=400                -> 4xx (direct DLX, geen retry)
                 a.weaveById("post-to-demo-app").replace().process(exchange -> {
                     attempts.incrementAndGet();
@@ -81,8 +86,11 @@ class EbmsHttpBridgeRouteTest extends CamelQuarkusTestSupport {
                 });
             });
             AdviceWith.adviceWith(ctx, "ebms-demo-error-route", a ->
-                a.weaveById("send-to-dlx-demo").replace().process(exchange ->
-                    deadLetteredBody.set(exchange.getIn().getBody(String.class))));
+                a.weaveById("send-to-dlx-demo").replace().process(exchange -> {
+                    deadLetteredBody.set(exchange.getIn().getBody(String.class));
+                    deadLetteredCorrelationId.set(
+                            exchange.getIn().getHeader("X-Correlation-Id", String.class));
+                }));
             ctx.start();
         }
     }
@@ -94,7 +102,18 @@ class EbmsHttpBridgeRouteTest extends CamelQuarkusTestSupport {
         assertNotNull(deliveredBody.get(), "bericht moet bij de app-mock aankomen");
         assertEquals("{\"ebms\":\"ok-1\"}", deliveredBody.get());
         assertNotNull(deliveredCorrelationId.get(),
-                "X-Correlation-Id moet gezet zijn vóór aflevering");
+                "X-Correlation-Id moet gezet zijn vóór aflevering (exchangeId-fallback)");
+    }
+
+    @Test
+    void meegegevenCorrelatieIdWintVanExchangeIdFallback() {
+        template().sendBodyAndHeader("direct:mock-source", "{\"ebms\":\"hdr-1\"}",
+                "X-Correlation-Id", "corr-extern-1");
+
+        assertEquals("{\"ebms\":\"hdr-1\"}", deliveredBody.get(),
+                "bericht moet bij de app-mock aankomen");
+        assertEquals("corr-extern-1", deliveredCorrelationId.get(),
+                "een MEEGEGEVEN X-Correlation-Id wint van de exchangeId-fallback");
     }
 
     @Test
@@ -131,6 +150,21 @@ class EbmsHttpBridgeRouteTest extends CamelQuarkusTestSupport {
         assertEquals("{\"ebms\":\"fail-4xx\"}", deadLetteredBody.get());
         assertEquals(pogingenVooraf + 1, attempts.get(),
                 "4xx = client-fout: bewust GEEN redelivery, direct naar error-route");
+    }
+
+    @Test
+    void deadLetterBehoudtCorrelatieIdVoorTraceerbaarheid() {
+        Exchange request = ExchangeBuilder.anExchange(context())
+                .withBody("{\"ebms\":\"fail-dlx-corr\"}")
+                .withHeader("X-Correlation-Id", "corr-dlx-1")
+                .withHeader("X-Test-Respond", "400")
+                .build();
+        template().send("direct:mock-source", request);
+
+        assertEquals("{\"ebms\":\"fail-dlx-corr\"}", deadLetteredBody.get(),
+                "bericht moet (direct, 4xx) op de DLX-mock aankomen");
+        assertEquals("corr-dlx-1", deadLetteredCorrelationId.get(),
+                "de dead-letter behoudt de X-Correlation-Id voor traceerbaarheid");
     }
 
     @Test

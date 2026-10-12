@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: d29313e29590098a54fb00e00e1ff6af5d22a575)
 # ebms_http_bridge
 
 EBMS → legacy-apps webhook-bridge: Apache Camel (Quarkus) die EBMS-berichten uit
@@ -138,11 +139,13 @@ is geen broker of endpoint nodig in CI.
 
 | Test | Bewijst |
 |---|---|
-| levertBerichtAfOpAppEndpointMetCorrelatieId | bericht komt bij de HTTP-stap aan met X-Correlation-Id |
-| probeertServerfoutOpnieuwTotMaximumEnDeadLetters | 5xx -> 3 redeliveries (elke retry herhaalt de aanroep) -> DLX |
-| probeertNetwerkfoutOpnieuwTotMaximumEnDeadLetters | connectiefout -> 3 redeliveries -> DLX |
-| stuurtClientRejectDirectNaarDeadLetterZonderRetry | 4xx -> 1 poging -> DLX (geen redelivery) |
-| schrijftNotificatieNaarNotifySink | falende aflevering komt in het notify-bestand voor beheer |
+| levertBerichtAfOpAppEndpointMetCorrelatie | bericht komt bij de HTTP-stap aan met X-Correlation-Id (exchangeId-fallback) |
+| meegegevenCorrelatieIdWintVanExchangeIdFallback | een meegegeven X-Correlation-Id (van de ebms-adapter) blijft behouden i.p.v. overschreven te worden |
+| doetRedeliveriesBij5xxEnDeadLetteredDaarna | 5xx -> 3 redeliveries (elke retry herhaalt de aanroep) -> DLX |
+| doetRedeliveriesBijNetwerkfoutEnDeadLetteredDaarna | connectiefout -> 3 redeliveries -> DLX |
+| stuurt4xxZonderRedeliveryDirectNaarDeadLetter | 4xx -> 1 poging -> DLX (geen redelivery) |
+| deadLetterBehoudtCorrelatieIdVoorTraceerbaarheid | de dead-letter behoudt de X-Correlation-Id (DLX-bericht is traceerbaar) |
+| schrijftNotificatieVoorBeheerNaarNotifySink | falende aflevering komt in het notify-bestand voor beheer |
 
 Lokaal draaien: `mvn test`. Faalt een test, reproduceer het scenario dan met het
 bijbehorende `rabbitmqadmin publish`-commando uit de dev-loop hierboven.

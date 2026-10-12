@@ -33,13 +33,15 @@
         prefetchCount: '{{ebms.demo.prefetchCount:1}}'
         concurrentConsumers: '{{ebms.demo.consumers:1}}'
       steps:
+        # Correlatie: een MEEGEGEVEN X-Correlation-Id (vanuit de ebms-adapter,
+        # via de RabbitMQ-headers) blijft behouden; anders exchangeId-fallback.
         - setHeader:
             id: set-correlation-id
             name: X-Correlation-Id
             expression:
               simple:
                 id: simple-correlation-demo
-                expression: '${exchangeId}'
+                expression: '${header.X-Correlation-Id ?: ${exchangeId}}'
         - log:
             id: log-received-demo
             message: 'event=message-received app=demo queue={{ebms.demo.queue}} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'

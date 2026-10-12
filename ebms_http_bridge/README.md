@@ -1,3 +1,4 @@
+successfully downloaded text file (SHA: d0dff7cc4993d91cbc795331ccde955a566f39e7)
 successfully downloaded text file (SHA: d29313e29590098a54fb00e00e1ff6af5d22a575)
 # ebms_http_bridge
 
@@ -149,6 +150,15 @@ is geen broker of endpoint nodig in CI.
 
 Lokaal draaien: `mvn test`. Faalt een test, reproduceer het scenario dan met het
 bijbehorende `rabbitmqadmin publish`-commando uit de dev-loop hierboven.
+
+> **Verwachte log-ruis bij `mvn test`:** tijdens de Quarkus-opstart probeert de
+> Spring AMQP-listener-container een échte RabbitMQ-connectie (default
+> `localhost:5672`). Zonder lokale broker zie je dan elke 5 s
+> `Error creating consumer; retrying in 5000 ... ConnectException: Connection refused`
+> (plus een eenmalige melding over `Automatic Recovery`). Dit is onschuldig:
+> de tests advisen de consumer weg naar `direct:mock-source`, dus er wordt
+> géén broker nodig gehad en alle tests draaien normaal door. Trekt de ruis
+> je aandacht: start een lokale broker (dev-loop stap 1) of negeer het.
 
 ## Belangrijke env vars
 

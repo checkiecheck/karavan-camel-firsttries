@@ -14,7 +14,7 @@
       parameters:
         host: 0.0.0.0
         port: '{{mock.es.port:9200}}'
-        protocol: HTTP
+        protocol: http
         matchOnUriPrefix: true
       steps:
         - log:

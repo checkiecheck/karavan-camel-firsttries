@@ -92,7 +92,10 @@ jobs:
   # ---- Deploy: self-hosted runner in het k3s-netwerk (pollt uitgaand bij GitHub) ----
   deploy:
     needs: build
-    if: needs.build.outputs.changed-dirs != ''
+    # Guard: deploy pas als de repository-variable DEPLOY_ENABLED op 'true' staat
+    # (zolang de self-hosted runner er nog niet is, blijft de job anders ~1 dag op 'queued' wachten).
+    # Aanzetten zonder code-wijziging: repo Settings > Secrets and variables > Actions > Variables > DEPLOY_ENABLED=true
+    if: needs.build.outputs.changed-dirs != '' && vars.DEPLOY_ENABLED == 'true'
     runs-on: self-hosted
     concurrency:
       group: deploy-integration-ns

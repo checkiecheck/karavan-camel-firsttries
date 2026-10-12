@@ -1,0 +1,133 @@
+# EBMS -> legacy-apps webhook-bridge (per-app aflevering, keuze 2a: route per app)
+#
+# Terugweg: per vragende app een eigen route-paar (delivery + error) met eigen
+# queue, endpoint, retry-policy en DLX - bewust gekozen zodat per-app logica
+# toe te voegen is zonder andere apps te raken (VOORSTEL.md keuze 2a).
+# RabbitMQ-component: spring-rabbitmq (patroon 15); connectiegegevens zitten in
+# de CachingConnectionFactory-bean, niet in de URI.
+#
+# APP-TEMPLATE: een nieuwe app = dit route-paar kopieren met <app> vervangen
+# + property-blok in application.properties + ConfigMap-entry in k8s/manifests.yaml.
+# Onderstaand paar is de eerste instantie: app "demo".
+- route:
+    id: ebms-demo-delivery
+    description: 'Levert EBMS-berichten uit ebms.demo.out af op het HTTP-endpoint van app demo (webhook)'
+    errorHandler:
+      id: errorHandler-ebms-demo
+      deadLetterChannel:
+        id: deadLetterChannel-ebms-demo
+        deadLetterUri: direct:ebms-demo-error
+        redeliveryPolicy:
+          id: redeliveryPolicy-ebms-demo
+          maximumRedeliveries: 3
+          redeliveryDelay: '2000'
+          retryAttemptedLogLevel: WARN
+        useOriginalMessage: true
+    from:
+      id: ebms-demo-from
+      uri: spring-rabbitmq
+      parameters:
+        exchangeName: '{{ebms.demo.exchange}}'
+        queues: '{{ebms.demo.queue}}'
+        autoDeclare: 'false'
+        prefetchCount: '{{ebms.demo.prefetchCount:1}}'
+        concurrentConsumers: '{{ebms.demo.consumers:1}}'
+      steps:
+        - setHeader:
+            id: set-correlation-id
+            name: X-Correlation-Id
+            expression:
+              simple:
+                id: simple-correlation-demo
+                expression: '${exchangeId}'
+        - log:
+            id: log-received-demo
+            message: 'event=message-received app=demo queue={{ebms.demo.queue}} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+            loggingLevel: INFO
+        - setHeader:
+            id: set-target-uri-demo
+            name: X-EBMS-Target-Url
+            expression:
+              constant:
+                id: constant-target-uri-demo
+                expression: '{{ebms.demo.endpointUrl}}'
+        # De aanroep zit bewust in een processor (bean): een retrybare fout
+        # (5xx/netwerk) moet ONTSTAAN in de producentstap, want Camel-redelivery
+        # herstart op het faalpunt - niet aan het begin van de route. Alleen zo
+        # wordt het endpoint bij elke retry echt opnieuw aangeroepen.
+        - process:
+            id: post-to-demo-app
+            ref: ebmsDeliveryProcessor
+        - choice:
+            id: choice-delivery-outcome-demo
+            when:
+              - id: when-client-error-demo
+                simple: '${header.CamelHttpResponseCode} >= 400 && ${header.CamelHttpResponseCode} <= 499'
+                steps:
+                  - log:
+                      id: log-client-rejected-demo
+                      message: 'event=delivery-client-rejected app=demo status=${header.CamelHttpResponseCode} correlationId=${header.X-Correlation-Id} reason=no-retry-4xx'
+                      loggingLevel: WARN
+                  - to:
+                      id: to-error-route-client-demo
+                      uri: direct
+                      parameters:
+                        name: ebms-demo-error
+            otherwise:
+              id: otherwise-delivered-demo
+              steps:
+                - log:
+                    id: log-delivered-demo
+                    message: 'event=delivered app=demo status=${header.CamelHttpResponseCode} correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId}'
+                    loggingLevel: INFO
+- route:
+    id: ebms-demo-error-route
+    description: 'Foutafhandeling app demo - error-log, notificatie naar beheer (notify-sink), doorsturen naar DLX'
+    from:
+      id: ebms-demo-error-from
+      uri: direct
+      parameters:
+        name: ebms-demo-error
+      steps:
+        - log:
+            id: log-error-audit-demo
+            message: 'event=delivery-failed app=demo correlationId=${header.X-Correlation-Id} exchangeId=${exchangeId} reason=${exception.message}'
+            loggingLevel: ERROR
+        - to:
+            id: notify-beheer-demo
+            uri: direct
+            parameters:
+              name: ebms-notify
+        - to:
+            id: send-to-dlx-demo
+            uri: spring-rabbitmq
+            parameters:
+              exchangeName: '{{ebms.demo.dlx.exchange}}'
+              routingKey: '{{ebms.demo.dlx.routingKey}}'
+              skipDeclareQueue: 'true'
+              skipDeclareExchange: 'true'
+              skipBindQueue: 'true'
+        - log:
+            id: log-dlq-sent-demo
+            message: 'event=dead-lettered app=demo dlx={{ebms.demo.dlx.exchange}} correlationId=${header.X-Correlation-Id}'
+            loggingLevel: WARN
+# --- Gedeelde notify-sink: melding voor beheer, nu als tekstbestand (keuze 3) ---
+- route:
+    id: ebms-notify-sink
+    description: 'DEV/MVP notificatie-sink: schrijft falende afleveringen naar een tekstbestand voor beheer (nog geen echte notificatie-aflevering)'
+    from:
+      id: ebms-notify-from
+      uri: direct
+      parameters:
+        name: ebms-notify
+      steps:
+        - setHeader:
+            id: set-notify-file
+            name: CamelFileName
+            expression:
+              constant:
+                id: constant-notify-file
+                expression: ebms-notify.log
+        - to:
+            id: write-notify-file
+            uri: '{{ebms.notify.fileUri}}'

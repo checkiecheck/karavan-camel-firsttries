@@ -110,3 +110,31 @@ EBMS-adapter ──publish──▶ topic exchange "ebms.events"
   (samen met pom.xml, routes, tests, Dockerfile, k8s, README volgens patroon 14).
 - Naamgeving: k8s-namen met hyphens (`ebms-http-bridge`), queue-namen met punten
   (`ebms.<app>.out`), mapnaam met underscore conform repo-conventie.
+
+---
+
+## Genomen beslissingen (na review, vastgesteld vóór bouw)
+
+| Keuze | Beslissing | Toelichting |
+|---|---|---|
+| 1. Scope | Alleen de terugweg (Rabbit → HTTP-webhook) | Ingest blijft bij de bestaande Kong-plugin; de terugweg heeft geen eigen ingest-orchestration nodig. |
+| 2. Route-model | **2a: route-paar per app** (delivery + error) | Per-app extra logica (auth, mapping, retry-policy) mogelijk zonder andere apps te raken; bij 4–6 apps goed beheerbaar. |
+| 3. 4xx-afhandeling | Direct naar DLX, géén redelivery + notificatie naar beheer | 4xx = structureel (bericht/app zal niet lukken); retry verspelt alleen. Notify-sink is MVP: tekstbestand, later echte notificatie. |
+| 4. Aantal apps | 4–6 apps | Route-per-app blijft houdbaar; template-benadering (APP-REGISTRY) maakt toevoegen een kopieerstap. |
+
+Overige punten (5–8) zijn geïmplementeerd zoals in de voorstellen: fire-and-forget
+op statuscode, `X-Correlation-Id` = exchangeId, per app default 1 consumer
+(configureerbaar), endpoint-config via properties + ConfigMap (envFrom), secrets
+via Secret/env var.
+
+### Retry-semantiek (bepaald tijdens de bouw)
+
+Camel-redelivery herstart op het **faalpunt**, niet aan het begin van de route
+([Camel-gedrag, zie ook](https://stackoverflow.com/questions/22719023/camel-message-redelivery-not-behaving-as-expected)).
+Daarom zit de HTTP-aanroep in een `EbmsDeliveryProcessor` (producer-stap): een
+retrybare fout (5xx of netwerkfout) ontstaat ín de producentstap, zodat elke
+redelivery het legacy-endpoint écht opnieuw aanroept. Een `to: http` +
+`throwException` ná de aanroep zou dezelfde response opnieuw gooien zonder
+het endpoint ooit opnieuw te raken (schijn-retry). 4xx keert normaal terug uit
+de processor; de route stuurt het bericht bewust zonder retry naar de
+error-route (→ notify + DLX).

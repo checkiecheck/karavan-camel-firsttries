@@ -1,0 +1,70 @@
+# DEV-ONLY mock legacy-app voor de Karavan/JBang-loop. Wordt NIET in de container
+# gebakken (Dockerfile kopieert alleen ebms_http_bridge.camel.yaml expliciet).
+#
+# Path-based canned responses zodat de specialist alle aflever-scenarios kan
+# naspelen (zie README):
+#   POST /api/ebms            -> 200 (afgeleverd)
+#   POST /api/ebms?status=400 -> 400 (client-error, direct DLX, geen retry)
+#   POST /api/ebms?status=500 -> 500 (server-error, 3 redeliveries dan DLX)
+- route:
+    id: mock-legacy-http-target-route
+    description: 'DEV-ONLY mock legacy-app - canned responses op basis van de status-query-param'
+    from:
+      id: from-mock-legacy
+      uri: netty-http
+      parameters:
+        host: 0.0.0.0
+        port: '{{mock.legacy.port:18081}}'
+        protocol: http
+        matchOnUriPrefix: true
+      steps:
+        - log:
+            id: log-mock-request
+            message: 'event=mock-legacy-request method=${header.CamelHttpMethod} uri=${header.CamelHttpUri} body=${body}'
+            loggingLevel: INFO
+        - choice:
+            id: choice-mock-response
+            when:
+              - id: when-mock-client-error
+                simple: '${header.CamelHttpUri} contains "status=400"'
+                steps:
+                  - setHeader:
+                      id: set-mock-400
+                      name: CamelHttpResponseCode
+                      expression:
+                        constant:
+                          id: constant-mock-400
+                          expression: '400'
+              - id: when-mock-server-error
+                simple: '${header.CamelHttpUri} contains "status=500"'
+                steps:
+                  - setHeader:
+                      id: set-mock-500
+                      name: CamelHttpResponseCode
+                      expression:
+                        constant:
+                          id: constant-mock-500
+                          expression: '500'
+            otherwise:
+              id: otherwise-mock-ok
+              steps:
+                - setHeader:
+                    id: set-mock-200
+                    name: CamelHttpResponseCode
+                    expression:
+                      constant:
+                        id: constant-mock-200
+                        expression: '200'
+        - setHeader:
+            id: set-mock-content-type
+            name: Content-Type
+            expression:
+              constant:
+                id: constant-mock-ct
+                expression: application/json
+        - setBody:
+            id: set-mock-body
+            expression:
+              constant:
+                id: constant-mock-body
+                expression: '{"status":"received","by":"mock-legacy-http-target"}'

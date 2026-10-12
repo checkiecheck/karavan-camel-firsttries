@@ -83,6 +83,18 @@
   </dependencies>
 
   <build>
+    <resources>
+      <!-- Karavan root-layout: route + properties liggen plat in de integratie-directory.
+           Map ze naar het classpath-root zodat camel-quarkus ze vindt bij mvn test
+           (zelfde oplossing als ieee2030_proxy; de workflow kopieert ze niet meer). -->
+      <resource>
+        <directory>.</directory>
+        <includes>
+          <include>*.camel.yaml</include>
+          <include>application.properties</include>
+        </includes>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>${quarkus.platform.group-id}</groupId>
